@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>sharew</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0d0d0d;
+      color: #e0e0e0;
+      font-family: ui-monospace, monospace;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    #toolbar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 8px 14px;
+      background: #1a1a1a;
+      border-bottom: 1px solid #2a2a2a;
+      flex-shrink: 0;
+    }
+
+    #toolbar h1 { font-size: 14px; font-weight: 600; color: #7dd3fc; }
+
+    #status {
+      font-size: 12px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: #292929;
+    }
+    #status.live { background: #14532d; color: #4ade80; }
+    #status.offline { background: #450a0a; color: #f87171; }
+    #status.connecting { background: #1e293b; color: #94a3b8; }
+
+    #fps-counter { font-size: 12px; color: #6b7280; margin-left: auto; }
+
+    #token-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 14px;
+      background: #111;
+      border-bottom: 1px solid #222;
+      flex-shrink: 0;
+    }
+    #token-bar label { font-size: 12px; color: #9ca3af; }
+    #token-input {
+      flex: 1;
+      max-width: 320px;
+      background: #1f1f1f;
+      border: 1px solid #333;
+      border-radius: 4px;
+      color: #e0e0e0;
+      padding: 4px 8px;
+      font-size: 13px;
+      font-family: inherit;
+    }
+    #connect-btn {
+      background: #1d4ed8;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      padding: 4px 14px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    #connect-btn:hover { background: #2563eb; }
+
+    #canvas-wrap {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      position: relative;
+    }
+
+    canvas {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      display: block;
+    }
+
+    #placeholder {
+      position: absolute;
+      text-align: center;
+      color: #4b5563;
+      font-size: 14px;
+    }
+    #placeholder span { display: block; font-size: 48px; margin-bottom: 12px; }
+  </style>
+</head>
+<body>
+
+<div id="toolbar">
+  <h1>sharew</h1>
+  <div id="status" class="connecting">connecting…</div>
+  <div id="fps-counter">— fps</div>
+</div>
+
+<div id="token-bar">
+  <label for="token-input">Token:</label>
+  <input id="token-input" type="password" placeholder="Enter access token" />
+  <button id="connect-btn">Connect</button>
+</div>
+
+<div id="canvas-wrap">
+  <canvas id="screen"></canvas>
+  <div id="placeholder"><span>📡</span>Waiting for stream…</div>
+</div>
+
+<script>
+  const canvas = document.getElementById('screen');
+  const ctx = canvas.getContext('2d');
+  const statusEl = document.getElementById('status');
+  const fpsEl = document.getElementById('fps-counter');
+  const placeholder = document.getElementById('placeholder');
+  const tokenInput = document.getElementById('token-input');
+  const connectBtn = document.getElementById('connect-btn');
+
+  // Read token from URL hash first (e.g. /#mytoken)
+  if (location.hash) tokenInput.value = location.hash.slice(1);
+
+  let ws = null;
+  let frameCount = 0;
+  let lastFpsTime = performance.now();
+
+  function setStatus(state, text) {
+    statusEl.className = state;
+    statusEl.textContent = text;
+  }
+
+  function connect() {
+    if (ws) { ws.close(); ws = null; }
+
+    const token = tokenInput.value.trim();
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    const url = `${proto}://${location.host}/ws/viewer${token ? '?token=' + encodeURIComponent(token) : ''}`;
+
+    setStatus('connecting', 'connecting…');
+    ws = new WebSocket(url);
+    ws.binaryType = 'arraybuffer';
+
+    ws.onopen = () => setStatus('connecting', 'connected — waiting for sender');
+
+    ws.onmessage = (evt) => {
+      const blob = new Blob([evt.data], { type: 'image/jpeg' });
+      const url = URL.createObjectURL(blob);
+      const img = new Image();
+      img.onload = () => {
+        if (canvas.width !== img.width || canvas.height !== img.height) {
+          canvas.width = img.width;
+          canvas.height = img.height;
+        }
+        ctx.drawImage(img, 0, 0);
+        URL.revokeObjectURL(url);
+        placeholder.style.display = 'none';
+        setStatus('live', 'live');
+        frameCount++;
+      };
+      img.src = url;
+    };
+
+    ws.onclose = (e) => {
+      const msg = e.code === 4003 ? 'invalid token' : 'disconnected';
+      setStatus('offline', msg);
+      placeholder.style.display = '';
+      // Auto-reconnect unless token was wrong
+      if (e.code !== 4003) setTimeout(connect, 3000);
+    };
+
+    ws.onerror = () => setStatus('offline', 'error');
+  }
+
+  connectBtn.addEventListener('click', connect);
+  tokenInput.addEventListener('keydown', e => { if (e.key === 'Enter') connect(); });
+
+  // FPS counter
+  setInterval(() => {
+    const now = performance.now();
+    const elapsed = (now - lastFpsTime) / 1000;
+    const fps = (frameCount / elapsed).toFixed(1);
+    fpsEl.textContent = `${fps} fps`;
+    frameCount = 0;
+    lastFpsTime = now;
+  }, 2000);
+
+  // Auto-connect if token is pre-filled
+  if (tokenInput.value) connect();
+</script>
+</body>
+</html>
