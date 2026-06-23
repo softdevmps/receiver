@@ -51,6 +51,16 @@ async def status():
     }
 
 
+async def _heartbeat(ws: WebSocket) -> None:
+    """Send a ping text every 15s so the sender can detect dead connections."""
+    while True:
+        await asyncio.sleep(15)
+        try:
+            await asyncio.wait_for(ws.send_text('{"ping":1}'), timeout=5.0)
+        except Exception:
+            return
+
+
 @app.websocket("/ws/sender")
 async def sender_endpoint(ws: WebSocket, token: str = Query("")):
     global _latest_frame, _sender_connected
@@ -58,6 +68,7 @@ async def sender_endpoint(ws: WebSocket, token: str = Query("")):
     await ws.accept()
     _sender_connected = True
 
+    hb_task = asyncio.create_task(_heartbeat(ws))
     try:
         while True:
             msg = await ws.receive()
@@ -88,20 +99,21 @@ async def sender_endpoint(ws: WebSocket, token: str = Query("")):
     except WebSocketDisconnect:
         pass
     finally:
+        hb_task.cancel()
         _sender_connected = False
         _latest_frame = None
 
 
 async def _push_bytes(viewer: WebSocket, data: bytes) -> None:
     try:
-        await viewer.send_bytes(data)
+        await asyncio.wait_for(viewer.send_bytes(data), timeout=2.0)
     except Exception:
         _viewers.discard(viewer)
 
 
 async def _push_text(viewer: WebSocket, text: str) -> None:
     try:
-        await viewer.send_text(text)
+        await asyncio.wait_for(viewer.send_text(text), timeout=2.0)
     except Exception:
         _viewers.discard(viewer)
 
